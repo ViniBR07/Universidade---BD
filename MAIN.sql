@@ -1,0 +1,250 @@
+USE master;
+GO
+IF DB_ID('Universidade') IS NOT NULL
+BEGIN
+    ALTER DATABASE Universidade SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE Universidade;
+END;
+GO
+CREATE DATABASE Universidade;
+GO
+USE Universidade;
+GO
+
+-- 1. ESTRUTURA DO BANCO E DADOS INICIAIS
+CREATE TABLE ALUNOS (
+    MATRICULA INT IDENTITY(1,1) PRIMARY KEY,
+    NOME      NVARCHAR(50) NOT NULL
+);
+CREATE TABLE CURSOS (
+    CURSO CHAR(3)      PRIMARY KEY,
+    NOME  NVARCHAR(50) NOT NULL
+);
+CREATE TABLE PROFESSOR (
+    PROFESSOR INT IDENTITY(1,1) PRIMARY KEY,
+    NOME      NVARCHAR(50) NOT NULL
+);
+CREATE TABLE MATERIAS (
+    SIGLA        CHAR(3)      PRIMARY KEY,
+    NOME         NVARCHAR(50) NOT NULL,
+    CARGAHORARIA INT          NOT NULL,
+    CURSO        CHAR(3)      NOT NULL REFERENCES CURSOS (CURSO),
+    PROFESSOR    INT          NULL     REFERENCES PROFESSOR (PROFESSOR)
+);
+CREATE TABLE MATRICULA (
+    MATRICULA   INT     NOT NULL REFERENCES ALUNOS (MATRICULA),
+    CURSO       CHAR(3) NOT NULL REFERENCES CURSOS (CURSO),
+    MATERIA     CHAR(3) NOT NULL REFERENCES MATERIAS (SIGLA),
+    PROFESSOR   INT     NOT NULL REFERENCES PROFESSOR (PROFESSOR),
+    PERLETIVO   INT     NOT NULL,
+    N1 DECIMAL(4,2), N2 DECIMAL(4,2), N3 DECIMAL(4,2), N4 DECIMAL(4,2),
+    TOTALPONTOS DECIMAL(5,2),
+    MEDIA       DECIMAL(4,2),
+    F1 INT, F2 INT, F3 INT, F4 INT,
+    TOTALFALTAS INT,
+    PERCFREQ    FLOAT,
+    RESULTADO   VARCHAR(20),
+    MEDIAFINAL  DECIMAL(4,2),
+    NOTAEXAME   DECIMAL(4,2),
+    CONSTRAINT PK_MATRICULA PRIMARY KEY (MATRICULA, CURSO, MATERIA, PROFESSOR, PERLETIVO)
+);
+GO
+
+INSERT INTO ALUNOS (NOME) VALUES (N'Pedro');
+INSERT INTO CURSOS (CURSO, NOME) VALUES ('ENG', N'ENGENHARIA');
+INSERT INTO PROFESSOR (NOME) VALUES (N'DORNEL');
+INSERT INTO PROFESSOR (NOME) VALUES (N'WALTER');
+INSERT INTO MATERIAS (SIGLA, NOME, CARGAHORARIA, CURSO, PROFESSOR) VALUES ('BDA', N'BANCO DE DADOS', 144, 'ENG', 1);
+INSERT INTO MATERIAS (SIGLA, NOME, CARGAHORARIA, CURSO, PROFESSOR) VALUES ('PRG', N'PROGRAMAÇÃO',    144, 'ENG', 2);
+GO
+
+-- 2. MATRICULAR O ALUNO EM TODAS AS MATERIAS DO CURSO
+CREATE OR ALTER PROCEDURE dbo.sp_MatricularAluno
+    @AlunoId INT,
+    @Curso   CHAR(3),
+    @Ano     INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM ALUNOS WHERE MATRICULA = @AlunoId)
+    BEGIN
+        PRINT 'Aluno nao existe.';
+        RETURN;
+    END
+
+    IF NOT EXISTS (SELECT 1 FROM CURSOS WHERE CURSO = @Curso)
+    BEGIN
+        PRINT 'Curso nao existe.';
+        RETURN;
+    END
+
+    IF EXISTS (SELECT 1
+               FROM MATRICULA AS m
+               WHERE m.MATRICULA = @AlunoId
+                 AND m.CURSO     = @Curso
+                 AND m.PERLETIVO = @Ano)
+    BEGIN
+        PRINT 'Aluno ja matriculado neste curso no periodo letivo informado.';
+        RETURN;
+    END
+
+    INSERT INTO MATRICULA (MATRICULA, CURSO, MATERIA, PROFESSOR, PERLETIVO)
+    SELECT @AlunoId, mt.CURSO, mt.SIGLA, mt.PROFESSOR, @Ano
+    FROM MATERIAS AS mt
+    WHERE mt.CURSO = @Curso
+      AND mt.PROFESSOR IS NOT NULL;
+
+    PRINT 'Matricula realizada: ' + CAST(@@ROWCOUNT AS VARCHAR(10)) + ' materia(s).';
+END;
+GO
+
+-- Teste
+EXEC dbo.sp_MatricularAluno @AlunoId = 1, @Curso = 'ENG', @Ano = 2026;
+SELECT * FROM MATRICULA;
+GO
+
+
+
+-- 1. APAGA AS PROCEDURES SE ELAS JÁ EXISTIREM (Evita erro em SQL antigos)
+IF OBJECT_ID('dbo.sp_CadastraNotas', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.sp_CadastraNotas;
+GO
+
+IF OBJECT_ID('dbo.sp_LancaExame', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.sp_LancaExame;
+GO
+
+-- 2. RECRIANDO A PROCEDURE DE NOTAS
+CREATE PROCEDURE dbo.sp_CadastraNotas (
+    @MATRICULA INT,
+    @CURSO CHAR(3),
+    @MATERIA CHAR(3),
+    @PERLETIVO INT,
+    @NOTA DECIMAL(4,2),
+    @FALTA INT,
+    @BIMESTRE INT
+)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @MediaAtual DECIMAL(4,2), 
+            @FaltasTotais INT, 
+            @CargaHoraria INT, 
+            @PercFreq FLOAT, 
+            @Resultado VARCHAR(20);
+
+    IF @BIMESTRE = 1
+    BEGIN
+        UPDATE MATRICULA
+        SET N1 = @NOTA, F1 = @FALTA, TOTALPONTOS = @NOTA, TOTALFALTAS = @FALTA, MEDIA = @NOTA
+        WHERE MATRICULA = @MATRICULA AND CURSO = @CURSO AND MATERIA = @MATERIA AND PERLETIVO = @PERLETIVO;
+    END
+    ELSE IF @BIMESTRE = 2
+    BEGIN
+        UPDATE MATRICULA
+        SET N2 = @NOTA, F2 = @FALTA, 
+            TOTALPONTOS = ISNULL(N1,0) + @NOTA, 
+            TOTALFALTAS = ISNULL(F1,0) + @FALTA, 
+            MEDIA = (ISNULL(N1,0) + @NOTA) / 2.0
+        WHERE MATRICULA = @MATRICULA AND CURSO = @CURSO AND MATERIA = @MATERIA AND PERLETIVO = @PERLETIVO;
+    END
+    ELSE IF @BIMESTRE = 3
+    BEGIN
+        UPDATE MATRICULA
+        SET N3 = @NOTA, F3 = @FALTA, 
+            TOTALPONTOS = ISNULL(N1,0) + ISNULL(N2,0) + @NOTA, 
+            TOTALFALTAS = ISNULL(F1,0) + ISNULL(F2,0) + @FALTA, 
+            MEDIA = (ISNULL(N1,0) + ISNULL(N2,0) + @NOTA) / 3.0
+        WHERE MATRICULA = @MATRICULA AND CURSO = @CURSO AND MATERIA = @MATERIA AND PERLETIVO = @PERLETIVO;
+    END
+    ELSE IF @BIMESTRE = 4
+    BEGIN
+        -- Atualiza notas do 4º bi
+        UPDATE MATRICULA
+        SET N4 = @NOTA, F4 = @FALTA, 
+            TOTALPONTOS = ISNULL(N1,0) + ISNULL(N2,0) + ISNULL(N3,0) + @NOTA, 
+            TOTALFALTAS = ISNULL(F1,0) + ISNULL(F2,0) + ISNULL(F3,0) + @FALTA, 
+            MEDIA = (ISNULL(N1,0) + ISNULL(N2,0) + ISNULL(N3,0) + @NOTA) / 4.0
+        WHERE MATRICULA = @MATRICULA AND CURSO = @CURSO AND MATERIA = @MATERIA AND PERLETIVO = @PERLETIVO;
+
+        -- Busca os dados para calcular se passou
+        SELECT @MediaAtual = m.MEDIA, 
+               @FaltasTotais = m.TOTALFALTAS,
+               @CargaHoraria = mt.CARGAHORARIA
+        FROM MATRICULA m
+        INNER JOIN MATERIAS mt ON m.MATERIA = mt.SIGLA
+        WHERE m.MATRICULA = @MATRICULA AND m.CURSO = @CURSO AND m.MATERIA = @MATERIA AND m.PERLETIVO = @PERLETIVO;
+
+        SET @PercFreq = ((CAST(@CargaHoraria AS FLOAT) - CAST(@FaltasTotais AS FLOAT)) / @CargaHoraria) * 100.0;
+
+        IF @PercFreq < 75.0
+            SET @Resultado = 'REPROVADO POR FALTA';
+        ELSE IF @MediaAtual >= 7.0
+            SET @Resultado = 'APROVADO';
+        ELSE IF @MediaAtual < 4.0
+            SET @Resultado = 'REPROVADO';
+        ELSE
+            SET @Resultado = 'EXAME';
+
+        -- Grava o resultado final
+        UPDATE MATRICULA
+        SET PERCFREQ = @PercFreq, 
+            RESULTADO = @Resultado,
+            MEDIAFINAL = CASE WHEN @Resultado IN ('APROVADO', 'REPROVADO', 'REPROVADO POR FALTA') THEN @MediaAtual ELSE NULL END
+        WHERE MATRICULA = @MATRICULA AND CURSO = @CURSO AND MATERIA = @MATERIA AND PERLETIVO = @PERLETIVO;
+    END
+END;
+GO
+
+DECLARE
+    @Matricula INT,
+    @Curso CHAR(3),
+    @Materia CHAR(3),
+    @Ano INT,
+    @Bimestre INT,
+    @Nota FLOAT,
+    @Falta INT;
+
+DECLARE matriculas CURSOR LOCAL FAST_FORWARD FOR
+    SELECT MATRICULA, CURSO, MATERIA, PERLETIVO
+    FROM MATRICULA
+    WHERE PERLETIVO = 2026;
+
+OPEN matriculas;
+FETCH NEXT FROM matriculas INTO @Matricula, @Curso, @Materia, @Ano;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @Bimestre = 1;
+
+    WHILE @Bimestre <= 4
+    BEGIN
+        SET @Nota = FLOOR(RAND(CHECKSUM(NEWID())) * 101) / 10.0;
+        SET @Falta = FLOOR(RAND(CHECKSUM(NEWID())) * 6);
+
+        EXEC dbo.sp_CadastraNotas
+            @MATRICULA = @Matricula,
+            @CURSO = @Curso,
+            @MATERIA = @Materia,
+            @PERLETIVO = @Ano,
+            @NOTA = @Nota,
+            @FALTA = @Falta,
+            @BIMESTRE = @Bimestre;
+
+        SET @Bimestre = @Bimestre + 1;
+    END;
+
+    FETCH NEXT FROM matriculas INTO @Matricula, @Curso, @Materia, @Ano;
+END;
+
+CLOSE matriculas;
+DEALLOCATE matriculas;
+
+SELECT MATRICULA, CURSO, MATERIA, PERLETIVO,
+       FORMAT(TOTALPONTOS, '00.00', 'pt-BR') AS TOTALPONTOS,
+       FORMAT(MEDIA, '00.00', 'pt-BR') AS MEDIA,
+       RESULTADO
+FROM MATRICULA
+WHERE PERLETIVO = 2026;
